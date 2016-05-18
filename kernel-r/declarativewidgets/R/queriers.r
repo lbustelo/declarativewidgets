@@ -39,10 +39,10 @@ Spark_DataFrame_Querier <- R6Class(
         inherit = Querier,
         public = list(
         handle_sort = function(df, sort_expr) {
-            return (arrange(sparkFares, sort_expr$by, decreasing=(sort_expr$ascending == "FALSE")))
+            return (arrange(df, sort_expr$by, decreasing=(sort_expr$ascending == "FALSE")))
         },
         handle_filter = function(df, filter_expr) {
-            return (filter(sparkFares, filter_expr))
+            return (filter(df, filter_expr))
         },
         handle_group = function(df, grp_expr) {
             agg_args <- list()
