@@ -1,6 +1,6 @@
 package urth
 
-import declarativewidgets.{Channel, Default}
+import declarativewidgets.{ChannelTrait, Channel, Default}
 import org.apache.toree.kernel.api.Kernel
 
 package object widgets {
@@ -11,7 +11,7 @@ package object widgets {
   }
 
   object WidgetChannels {
-    def channel(chan: String = Default.Channel): Channel = {
+    def channel(chan: String = Default.Channel): ChannelTrait = {
       if( declarativewidgets.getKernel != null ) {
         declarativewidgets.getKernel.err.println("The `urth` package name is deprecated. Will be removed in version 0.7.0. Use 'declarativewidgets' instead.")
         declarativewidgets.getKernel.err.flush()

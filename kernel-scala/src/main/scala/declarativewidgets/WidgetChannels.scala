@@ -12,22 +12,36 @@ import declarativewidgets.util.MessageSupport
  * @param comm CommWriter used for communication with the front-end.
  */
 class WidgetChannels(val comm: CommWriter)
-  extends Widget(comm) with StandardFunctionSupport {
+  extends Widget(comm) with StandardFunctionSupport with SerializationSupport {
 
   WidgetChannels.register(this)
 
-  override def handleBackbone(msg: MsgData): Unit = ()
+  override def handleBackbone(msg: MsgData, msgSupport:MessageSupport): Unit = ()
+
+  override def handleRequestState(msgContent: MsgData, msgSupport:MessageSupport): Unit ={
+    val cachedData = WidgetChannels.cachedChannelData.flatMap {
+      case (chan, data) =>
+        data.map{
+          case (key, value ) => WidgetChannels.chanKey(chan,key) -> serialize(value._1, value._2)
+        }
+    }.toMap
+
+    msgSupport.sendState(cachedData)
+
+    //once the request state is handled, the cache is cleared
+    WidgetChannels.cachedChannelData.clear()
+  }
 
   /**
    * Handles a Comm Message whose method is custom.
    * @param msgContent The content field of the Comm Message.
    */
-  override def handleCustom(msgContent: MsgData): Unit = {
+  override def handleCustom(msgContent: MsgData, msgSupport:MessageSupport): Unit = {
     logger.debug(s"Handling custom message ${msgContent}...")
     (msgContent \ Comm.KeyEvent).asOpt[String] match {
       case Some(Comm.EventChange) => handleChange(msgContent) match {
-        case Right(u)  => sendOk()
-        case Left(msg) => sendError(msg)
+        case Right(u)  => msgSupport.sendOk()
+        case Left(msg) => msgSupport.sendError(msg)
       }
       case Some(evt) => logger.warn(s"Unhandled custom event ${evt}.")
       case None => logger.warn("No event value in custom comm message.")
@@ -102,8 +116,10 @@ class WidgetChannels(val comm: CommWriter)
  * @param comm CommWriter used for communication with the front-end.
  * @param chan Name of the channel.
  */
-case class Channel(comm: CommWriter, chan: String)
-  extends MessageSupport with SerializationSupport {
+case class Channel(comm: CommWriter, override val chan: String)
+  extends ChannelTrait with SerializationSupport {
+
+  val msgSupport:MessageSupport = Widget.toMessageSupport(comm)
 
   /**
    * Set a property on this channel using the given key and value.
@@ -113,7 +129,7 @@ case class Channel(comm: CommWriter, chan: String)
    *              number of rows returned for a DataFrame.
    */
   def set(key: String, value: Any, limit: Int = Default.Limit): Unit =
-    sendState(comm, chanKey(chan, key), serialize(value, limit))
+    msgSupport.sendState(WidgetChannels.chanKey(chan, key), serialize(value, limit))
 
   /**
    * Watch the given variable on this channel for changes, and execute the
@@ -123,9 +139,16 @@ case class Channel(comm: CommWriter, chan: String)
    */
   def watch(variable: String, handler: WatchHandler[_]): Unit =
     WidgetChannels.watch(this.chan, variable, handler)
+}
 
-  private def chanKey(chan: String, key: String): String = s"$chan:$key"
+/**
+ * Common trait for what is returned by WidgetChannels.channel()
+ */
+trait ChannelTrait {
+  val chan:String
 
+  def set(key: String, value: Any, limit: Int = Default.Limit): Unit
+  def watch(variable: String, handler: WatchHandler[_]): Unit
 }
 
 /**
@@ -135,20 +158,37 @@ case class Channel(comm: CommWriter, chan: String)
 object WidgetChannels extends LogLike {
 
   // Stores the most recently created WidgetChannels widget instance.
-  private[declarativewidgets] var theChannels: WidgetChannels = _
+  private[declarativewidgets] var theChannels: Option[WidgetChannels] = None
 
   // Maps channel name to a map of variable name to handler.
   private[declarativewidgets] var chanHandlers: Map[String, Map[String, WatchHandler[_]]] =
     Map()
 
+  // Maps that caches channel data
+  private[declarativewidgets] val cachedChannelData: collection.mutable.Map[String, collection.mutable.Map[String,(Any,Int)]] = collection.mutable.Map()
+
   /**
    * Provides a Channel instance for interacting with the channel
    * with the given name.
-   * @param chan Channel name.
+   * @param channelName Channel name.
    * @return Channel instance for `chan`.
    */
-  def channel(chan: String = Default.Channel): Channel =
-    Channel(this.theChannels.comm, chan)
+  def channel(channelName: String = Default.Channel): ChannelTrait = {
+    this.theChannels.map{ c =>
+      Channel(c.comm, channelName)
+    }.getOrElse{
+       new ChannelTrait {
+         override val chan = channelName
+
+         override def set(key: String, value: Any, limit: Int): Unit = {
+           val cachedData = cachedChannelData.getOrElseUpdate(chan, collection.mutable.Map())
+           cachedData(key) = (value, limit)
+         }
+
+         override def watch(variable: String, handler: WatchHandler[_]): Unit = {}
+       }
+    }
+  }
 
   /**
    * Register the handler to execute when a change occurs to the given
@@ -170,8 +210,10 @@ object WidgetChannels extends LogLike {
    * @param widget WidgetChannels widget instance to store.
    */
   private[declarativewidgets] def register(widget: WidgetChannels) : Unit = {
-    this.theChannels = widget
+    this.theChannels = Some(widget)
     logger.debug(s"Registered widget $widget as the global Channels.")
   }
+
+  private[declarativewidgets] def chanKey(chan: String, key: String): String = s"$chan:$key"
 
 }
